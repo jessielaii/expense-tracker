@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="記帳本" />
+  <meta name="theme-color" content="#6366f1" />
+  <title>記帳本</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { background: #f3f4f6; font-family: system-ui, -apple-system, sans-serif; }
+    #root { min-height: 100vh; }
+    /* 讓 iOS 安全區域（瀏海）正常運作 */
+    @supports (padding-top: env(safe-area-inset-top)) {
+      #safe-top { padding-top: env(safe-area-inset-top); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script type="text/babel">
+const { useState, useMemo } = React;
+
+// ── 常量 ─────────────────────────────────────────────────────────────────────
+const PALETTE = ['#6366f1','#ec4899','#f59e0b','#10b981','#3b82f6','#8b5cf6','#ef4444','#14b8a6','#f97316'];
+const LEDGER_EMOJIS = ['📅','✈️','🎌','🏖️','🛍️','🎉','💼','🏠','💑','🐾','🎓','🌸','🍜','🎒','🗺️','🎆','🧳','🏔️'];
+const CAT_EMOJIS = ['🍽️','🚌','🛍️','🎮','🏨','💊','🍺','📦','💰','📈','🎁','🏋️','📚','🐶','🎨','⚽','🎵','💻','🌿','☕','🍱','🎪','🛒','🎀'];
+const KEYS = ['7','8','9','⌫', '4','5','6','C', '1','2','3','.', '0','00','✓'];
+const WEEKDAYS = ['日','一','二','三','四','五','六'];
+const MONTHS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+// ── 預設分類 ─────────────────────────────────────────────────────────────────
+const DEFAULT_EXP = [
+  { id:'food',      name:'飲食',   emoji:'🍽️', subs:['早餐','午餐','晚餐','飲料','點心','宵夜'] },
+  { id:'transport', name:'交通',   emoji:'🚌', subs:['公車','捷運','計程車','高鐵','機票','油費'] },
+  { id:'shopping',  name:'購物',   emoji:'🛍️', subs:['服飾','3C','日用品','化妝品','紀念品'] },
+  { id:'entertain', name:'娛樂',   emoji:'🎮', subs:['電影','演唱會','遊樂園','訂閱服務'] },
+  { id:'hotel',     name:'住宿',   emoji:'🏨', subs:['飯店','民宿','Airbnb','青旅'] },
+  { id:'health',    name:'醫療',   emoji:'💊', subs:['掛號','藥品','健身房','保健品'] },
+  { id:'dining',    name:'餐廳',   emoji:'🍺', subs:['居酒屋','咖啡廳','拉麵','壽司','燒肉','甜點'] },
+  { id:'other_e',   name:'其他',   emoji:'📦', subs:['其他支出'] },
+];
+const DEFAULT_INC = [
+  { id:'salary',  name:'薪資', emoji:'💰', subs:['月薪','獎金','加班費','兼職'] },
+  { id:'invest',  name:'投資', emoji:'📈', subs:['股票','基金','利息','股利'] },
+  { id:'other_i', name:'其他', emoji:'🎁', subs:['禮金','退款','中獎','其他'] },
+];
+
+// ── 工具 ─────────────────────────────────────────────────────────────────────
+const f   = n => Math.abs(n).toLocaleString('zh-TW', { maximumFractionDigits: 0 });
+const p2  = n => String(n).padStart(2, '0');
+const tod = () => new Date().toISOString().split('T')[0];
+const fmtDate = s => {
+  const d = new Date(s + 'T00:00:00');
+  const t = new Date(); t.setHours(0,0,0,0);
+  const diff = Math.round((t - d) / 86400000);
+  const w = WEEKDAYS[d.getDay()];
+  if (diff === 0) return `今天（週${w}）`;
+  if (diff === 1) return `昨天（週${w}）`;
+  return `${d.getMonth()+1}月${d.getDate()}日（週${w}）`;
+};
+
+// ── 共用子元件（定義在 App 外部，避免每次 render 重建） ──────────────────────
+function ScopeBar({ scope, setScope, color, curLedger }) {
+  return (
+    <div style={{ display:'flex', gap:6, marginBottom:14 }}>
+      {[['current','目前帳本'],['all','全部帳本']].map(([v,lbl]) => (
+        <button key={v} onClick={() => setScope(v)}
+          style={{ padding:'6px 18px', borderRadius:99, border:'none', cursor:'pointer',
+            fontSize:13, fontWeight:700,
+            background: scope===v ? color : '#f3f4f6',
+            color: scope===v ? 'white' : '#6b7280',
+            transition:'all 0.15s' }}>
+          {lbl}
+        </button>
+      ))}
+      {scope==='current' && (
+        <span style={{ display:'flex', alignItems:'center', fontSize:12, color:'#9ca3af', marginLeft:4 }}>
+          {curLedger?.emoji} {curLedger?.name}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function TxRow({ tx, last, onSelect }) {
+  return (
+    <div onClick={() => onSelect(tx)}
+      style={{ display:'flex', alignItems:'center', padding:'12px 16px', cursor:'pointer',
+        borderBottom: last ? 'none' : '1px solid #f9fafb' }}>
+      <div style={{ width:42, height:42, borderRadius:13, marginRight:12, flexShrink:0,
+        background: tx.type==='expense' ? '#fff1f2' : '#f0fdf4',
+        display:'flex', alignItems:'center', justifyContent:'center', fontSize:21 }}>
+        {tx.catEmoji}
+      </div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:14, fontWeight:700, color:'#111827' }}>
+          {tx.catName}{tx.sub ? ` · ${tx.sub}` : ''}
+        </div>
+        {tx.memo && (
+          <div style={{ fontSize:12, color:'#9ca3af', marginTop:2,
+            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {tx.memo}
+          </div>
+        )}
+      </div>
+      <div style={{ fontWeight:800, fontSize:15, flexShrink:0,
+        color: tx.type==='income' ? '#10b981' : '#ef4444' }}>
+        {tx.type==='income' ? '+' : '-'}NT${f(tx.amount)}
+      </div>
+    </div>
+  );
+}
+
+// ── 主元件 ───────────────────────────────────────────────────────────────────
+function App() {
+
+  // ■ 核心資料
+  const [ledgers, setLedgers] = useState([{ id:'daily', name:'日常帳本', color:'#6366f1', emoji:'📅' }]);
+  const [curId,   setCurId]   = useState('daily');
+  const [txs,     setTxs]     = useState([]);
+
+  // ■ 頁面
+  const [tab,  setTab]  = useState('home');
+  const [stab, setStab] = useState('ledgers');
+
+  // ■ 新增表單
+  const [type,  setType]  = useState('expense');
+  const [calc,  setCalc]  = useState('0');
+  const [catId, setCatId] = useState('');
+  const [sub,   setSub]   = useState('');
+  const [memo,  setMemo]  = useState('');
+  const [date,  setDate]  = useState(tod());
+
+  // ■ 分類（可自定義）
+  const [expCats, setExpCats] = useState(DEFAULT_EXP);
+  const [incCats, setIncCats] = useState(DEFAULT_INC);
+
+  // ■ 交易詳情 modal
+  const [selTx, setSelTx] = useState(null);
+
+  // ■ 統計 & 日曆資料範圍切換
+  const [scope, setScope] = useState('current');
+
+  // ■ 日曆
+  const now = new Date();
+  const [calY,   setCalY]   = useState(now.getFullYear());
+  const [calM,   setCalM]   = useState(now.getMonth());
+  const [calDay, setCalDay] = useState(null);
+
+  // ■ 帳本新增表單
+  const [showNL,  setShowNL]  = useState(false);
+  const [nlName,  setNlName]  = useState('');
+  const [nlEmoji, setNlEmoji] = useState('✈️');
+  const [nlColor, setNlColor] = useState('#ec4899');
+
+  // ■ 分類管理
+  const [cmType,    setCmType]    = useState('expense');
+  const [showAddC,  setShowAddC]  = useState(false);
+  const [ncName,    setNcName]    = useState('');
+  const [ncEmoji,   setNcEmoji]   = useState('🍽️');
+  const [expandCid, setExpandCid] = useState(null);
+  const [newSub,    setNewSub]    = useState('');
+
+  // ── 衍生資料 ─────────────────────────────────────────────────────────────
+  const curLedger = ledgers.find(l => l.id === curId) || ledgers[0];
+  const color     = curLedger?.color || '#6366f1';
+  const addCats   = type === 'expense' ? expCats : incCats;
+  const selCat    = addCats.find(c => c.id === catId);
+
+  const curTxs = useMemo(() =>
+    txs.filter(t => t.ledgerId === curId)
+       .sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)),
+    [txs, curId]);
+
+  const grouped = useMemo(() => {
+    const g = {};
+    curTxs.forEach(t => { if (!g[t.date]) g[t.date] = []; g[t.date].push(t); });
+    return Object.entries(g).sort(([a],[b]) => b.localeCompare(a));
+  }, [curTxs]);
+
+  const curTotals = useMemo(() => {
+    const inc = curTxs.filter(t => t.type==='income').reduce((s,t)=>s+t.amount, 0);
+    const exp = curTxs.filter(t => t.type==='expense').reduce((s,t)=>s+t.amount, 0);
+    return { inc, exp, bal: inc - exp };
+  }, [curTxs]);
+
+  const scopedTxs = useMemo(() =>
+    scope === 'all' ? txs : txs.filter(t => t.ledgerId === curId),
+    [txs, scope, curId]);
+
+  const statsTotals = useMemo(() => {
+    const inc = scopedTxs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount, 0);
+    const exp = scopedTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount, 0);
+    return { inc, exp, bal: inc - exp };
+  }, [scopedTxs]);
+
+  const catStats = useMemo(() => {
+    const exp = scopedTxs.filter(t => t.type==='expense');
+    const total = exp.reduce((s,t) => s+t.amount, 0);
+    const by = {};
+    exp.forEach(t => {
+      if (!by[t.catId]) by[t.catId] = { name:t.catName, emoji:t.catEmoji, amount:0 };
+      by[t.catId].amount += t.amount;
+    });
+    return Object.values(by)
+      .sort((a,b) => b.amount - a.amount)
+      .map(c => ({ ...c, pct: total > 0 ? Math.round(c.amount/total*100) : 0 }));
+  }, [scopedTxs]);
+
+  const calPrefix = `${calY}-${p2(calM+1)}`;
+  const calTxs = useMemo(() =>
+    scopedTxs.filter(t => t.date.startsWith(calPrefix)),
+    [scopedTxs, calPrefix]);
+
+  const dayStats = useMemo(() => {
+    const s = {};
+    calTxs.forEach(t => {
+      const d = parseInt(t.date.split('-')[2]);
+      if (!s[d]) s[d] = { inc:0, exp:0 };
+      if (t.type === 'expense') s[d].exp += t.amount;
+      else s[d].inc += t.amount;
+    });
+    return s;
+  }, [calTxs]);
+
+  const maxDayExp = useMemo(() =>
+    Math.max(...Object.values(dayStats).map(d => d.exp), 1),
+    [dayStats]);
+
+  const calMonthTotals = useMemo(() => {
+    const inc = calTxs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount, 0);
+    const exp = calTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount, 0);
+    return { inc, exp };
+  }, [calTxs]);
+
+  const calDayTxs = useMemo(() => {
+    if (!calDay) return [];
+    const ds = `${calY}-${p2(calM+1)}-${p2(calDay)}`;
+    return scopedTxs.filter(t => t.date === ds)
+      .sort((a,b) => b.id.localeCompare(a.id));
+  }, [scopedTxs, calDay, calY, calM]);
+
+  const daysInMonth = new Date(calY, calM+1, 0).getDate();
+  const firstDay    = new Date(calY, calM, 1).getDay();
+  const calGrid = [];
+  for (let i = 0; i < firstDay; i++) calGrid.push(null);
+  for (let d = 1; d <= daysInMonth; d++) calGrid.push(d);
+  while (calGrid.length % 7 !== 0) calGrid.push(null);
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  const handleKey = k => setCalc(prev => {
+    if (k === 'C')  return '0';
+    if (k === '⌫')  return prev.length > 1 ? prev.slice(0,-1) : '0';
+    if (k === '.')  return prev.includes('.') ? prev : prev + '.';
+    if (k === '00') { if (prev==='0'||prev.includes('.')) return prev; return prev.length<8 ? prev+'00' : prev; }
+    if (prev.includes('.') && prev.split('.')[1]?.length >= 2) return prev;
+    if (prev === '0') return k;
+    return prev.length < 10 ? prev + k : prev;
+  });
+
+  const resetForm = () => { setCalc('0'); setCatId(''); setSub(''); setMemo(''); setDate(tod()); };
+
+  const handleSave = () => {
+    const amount = parseFloat(calc);
+    if (!amount || amount <= 0 || !catId) return;
+    const cat = addCats.find(c => c.id === catId);
+    setTxs(prev => [...prev, {
+      id: Date.now().toString(), ledgerId: curId, type, amount,
+      catId, catName: cat?.name||'', catEmoji: cat?.emoji||'',
+      sub, memo, date,
+    }]);
+    resetForm(); setTab('home');
+  };
+
+  const handleDelete = id => {
+    if (!window.confirm('確定要刪除這筆記錄嗎？')) return;
+    setTxs(prev => prev.filter(t => t.id !== id)); setSelTx(null);
+  };
+
+  const handleCreateLedger = () => {
+    if (!nlName.trim()) return;
+    const id = 'l' + Date.now();
+    setLedgers(prev => [...prev, { id, name: nlName.trim(), emoji: nlEmoji, color: nlColor }]);
+    setCurId(id);
+    setNlName(''); setNlEmoji('✈️'); setNlColor('#ec4899');
+    setShowNL(false); setTab('home');
+  };
+
+  const handleDeleteLedger = id => {
+    if (ledgers.length <= 1) return;
+    const target = ledgers.find(l => l.id === id);
+    const txCount = txs.filter(t => t.ledgerId === id).length;
+    const msg = txCount > 0
+      ? `確定要刪除「${target?.name}」？此帳本內的 ${txCount} 筆記錄也會一併刪除。`
+      : `確定要刪除「${target?.name}」？`;
+    if (!window.confirm(msg)) return;
+    setLedgers(prev => prev.filter(l => l.id !== id));
+    setTxs(prev => prev.filter(t => t.ledgerId !== id));
+    if (curId === id) setCurId(ledgers.find(l => l.id !== id)?.id || 'daily');
+  };
+
+  const handleAddCat = () => {
+    if (!ncName.trim()) return;
+    const id = 'c' + Date.now();
+    const cat = { id, name: ncName.trim(), emoji: ncEmoji, subs: [] };
+    if (cmType === 'expense') setExpCats(p => [...p, cat]);
+    else setIncCats(p => [...p, cat]);
+    setNcName(''); setNcEmoji('🍽️'); setShowAddC(false);
+  };
+
+  const handleDeleteCat = cid => {
+    const cats = cmType === 'expense' ? expCats : incCats;
+    const target = cats.find(c => c.id === cid);
+    if (!window.confirm(`確定要刪除「${target?.name}」分類嗎？`)) return;
+    if (cmType === 'expense') setExpCats(p => p.filter(c => c.id !== cid));
+    else setIncCats(p => p.filter(c => c.id !== cid));
+    if (expandCid === cid) setExpandCid(null);
+  };
+
+  const handleAddSub = cid => {
+    if (!newSub.trim()) return;
+    const s = newSub.trim();
+    if (cmType === 'expense') setExpCats(p => p.map(c => c.id===cid ? {...c, subs:[...c.subs, s]} : c));
+    else setIncCats(p => p.map(c => c.id===cid ? {...c, subs:[...c.subs, s]} : c));
+    setNewSub('');
+  };
+
+  const handleDeleteSub = (cid, idx) => {
+    if (cmType === 'expense') setExpCats(p => p.map(c => c.id===cid ? {...c, subs:c.subs.filter((_,i)=>i!==idx)} : c));
+    else setIncCats(p => p.map(c => c.id===cid ? {...c, subs:c.subs.filter((_,i)=>i!==idx)} : c));
+  };
+
+  const handleExport = () => {
+    const header = '日期,帳本,類型,金額,主分類,細項,備忘錄';
+    const rows = [...txs]
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .map(t => {
+        const ln = ledgers.find(l => l.id === t.ledgerId)?.name || '';
+        return [
+          t.date,
+          `"${ln}"`,
+          t.type === 'expense' ? '支出' : '收入',
+          t.amount,
+          `"${t.catName}"`,
+          `"${t.sub || ''}"`,
+          `"${(t.memo || '').replace(/"/g,'""')}"`,
+        ].join(',');
+      });
+    const csv = '\uFEFF' + [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = '記帳資料.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ════════════════════════════════════════════════════════════════════════════
+  return (
+    <div style={{ maxWidth:390, margin:'0 auto', minHeight:'100vh', background:'#f3f4f6',
+      fontFamily:'system-ui,-apple-system,sans-serif', display:'flex', flexDirection:'column',
+      position:'relative' }}>
+
+      {/* ════ HEADER ════ */}
+      <div style={{ background:color, color:'white', paddingTop:44, paddingBottom:22,
+        paddingLeft:16, paddingRight:16, flexShrink:0 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ fontSize:22 }}>{curLedger?.emoji}</span>
+            <select value={curId} onChange={e => setCurId(e.target.value)}
+              style={{ background:'rgba(255,255,255,0.22)', color:'white', border:'none',
+                borderRadius:8, padding:'5px 11px', fontSize:14, fontWeight:700, cursor:'pointer', outline:'none' }}>
+              {ledgers.map(l => (
+                <option key={l.id} value={l.id} style={{ color:'#1f2937', background:'white' }}>{l.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontSize:12, opacity:0.75, letterSpacing:1 }}>本期結餘</div>
+          <div style={{ fontSize:36, fontWeight:800, margin:'4px 0', letterSpacing:-1 }}>
+            NT$ {curTotals.bal > 0 ? '+' : curTotals.bal < 0 ? '-' : ''}{f(curTotals.bal)}
+          </div>
+          <div style={{ display:'flex', justifyContent:'center', gap:28, fontSize:13 }}>
+            <div><span style={{opacity:0.7}}>收入 </span><span style={{fontWeight:700}}>+{f(curTotals.inc)}</span></div>
+            <div style={{opacity:0.35}}>│</div>
+            <div><span style={{opacity:0.7}}>支出 </span><span style={{fontWeight:700}}>-{f(curTotals.exp)}</span></div>
+          </div>
+        </div>
+      </div>
+
+      {/* ════ CONTENT ════ */}
+      <div style={{ flex:1, overflowY:'auto', paddingBottom:76 }}>
+
+        {/* ══ 首頁 ══ */}
+        {tab === 'home' && (
+          <div>
+            {grouped.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'80px 20px', color:'#9ca3af' }}>
+                <div style={{ fontSize:56, marginBottom:12 }}>💸</div>
+                <div style={{ fontSize:17, fontWeight:700, color:'#6b7280', marginBottom:6 }}>還沒有記帳紀錄</div>
+                <div style={{ fontSize:13 }}>點下方 ＋ 開始記帳吧！</div>
+              </div>
+            ) : grouped.map(([d, dayTxs]) => {
+              const dayInc = dayTxs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount, 0);
+              const dayExp = dayTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount, 0);
+              return (
+                <div key={d} style={{ marginBottom:6 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', padding:'7px 16px',
+                    background:'#f9fafb', fontSize:12, color:'#6b7280', borderTop:'1px solid #e5e7eb' }}>
+                    <span style={{ fontWeight:700 }}>{fmtDate(d)}</span>
+                    <span>
+                      {dayInc > 0 && <span style={{color:'#10b981'}}>+{f(dayInc)}　</span>}
+                      {dayExp > 0 && <span style={{color:'#ef4444'}}>-{f(dayExp)}</span>}
+                    </span>
+                  </div>
+                  <div style={{ background:'white' }}>
+                    {dayTxs.map((tx, i) => <TxRow key={tx.id} tx={tx} last={i===dayTxs.length-1} onSelect={setSelTx} />)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ══ 日曆 ══ */}
+        {tab === 'calendar' && (
+          <div style={{ padding:16 }}>
+            <ScopeBar scope={scope} setScope={setScope} color={color} curLedger={curLedger} />
+
+            <div style={{ background:'white', borderRadius:16, padding:'16px', marginBottom:12 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+                <button onClick={() => {
+                  if (calM === 0) { setCalM(11); setCalY(y => y-1); } else setCalM(m => m-1);
+                  setCalDay(null);
+                }} style={{ background:'#f3f4f6', border:'none', borderRadius:9, width:36, height:36,
+                  fontSize:20, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>‹</button>
+                <span style={{ fontWeight:800, fontSize:17, color:'#111827' }}>{calY}年 {MONTHS[calM]}</span>
+                <button onClick={() => {
+                  if (calM === 11) { setCalM(0); setCalY(y => y+1); } else setCalM(m => m+1);
+                  setCalDay(null);
+                }} style={{ background:'#f3f4f6', border:'none', borderRadius:9, width:36, height:36,
+                  fontSize:20, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center' }}>›</button>
+              </div>
+
+              <div style={{ display:'flex', gap:10, marginBottom:16 }}>
+                <div style={{ flex:1, background:'#fff1f2', borderRadius:10, padding:'9px 12px' }}>
+                  <div style={{ fontSize:11, color:'#9ca3af', marginBottom:2 }}>本月支出</div>
+                  <div style={{ fontWeight:800, color:'#ef4444', fontSize:16 }}>-NT${f(calMonthTotals.exp)}</div>
+                </div>
+                <div style={{ flex:1, background:'#f0fdf4', borderRadius:10, padding:'9px 12px' }}>
+                  <div style={{ fontSize:11, color:'#9ca3af', marginBottom:2 }}>本月收入</div>
+                  <div style={{ fontWeight:800, color:'#10b981', fontSize:16 }}>+NT${f(calMonthTotals.inc)}</div>
+                </div>
+              </div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', marginBottom:4 }}>
+                {WEEKDAYS.map(w => (
+                  <div key={w} style={{ textAlign:'center', fontSize:12, fontWeight:700, padding:'3px 0',
+                    color: w==='日' ? '#ef4444' : w==='六' ? '#3b82f6' : '#9ca3af' }}>{w}</div>
+                ))}
+              </div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:3 }}>
+                {calGrid.map((d, i) => {
+                  if (!d) return <div key={`e${i}`} />;
+                  const ds   = dayStats[d];
+                  const expA = ds?.exp || 0;
+                  const isToday    = d === now.getDate() && calM === now.getMonth() && calY === now.getFullYear();
+                  const isSelected = d === calDay;
+                  const intensity  = expA > 0 ? Math.max(0.08, expA / maxDayExp) : 0;
+                  const dow = (firstDay + d - 1) % 7;
+                  return (
+                    <div key={d} onClick={() => setCalDay(d === calDay ? null : d)}
+                      style={{ borderRadius:10, padding:'5px 2px 4px', textAlign:'center', cursor:'pointer',
+                        background: isSelected ? color : expA > 0 ? `rgba(239,68,68,${intensity * 0.28})` : 'transparent',
+                        outline: isToday ? `2px solid ${color}` : 'none',
+                        transition: 'background 0.15s' }}>
+                      <div style={{ fontSize:13, fontWeight: isToday ? 800 : 500, lineHeight: 1.2,
+                        color: isSelected ? 'white' : dow===0 ? '#ef4444' : dow===6 ? '#3b82f6' : '#111827' }}>
+                        {d}
+                      </div>
+                      {expA > 0 && (
+                        <div style={{ fontSize:9, fontWeight:700, lineHeight:1.3,
+                          color: isSelected ? 'rgba(255,255,255,0.9)' : '#ef4444' }}>
+                          {expA >= 10000 ? `${(expA/10000).toFixed(1)}萬` : expA >= 1000 ? `${Math.round(expA/100)/10}K` : f(expA)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {calDay && (
+              <div style={{ background:'white', borderRadius:16, overflow:'hidden' }}>
+                <div style={{ padding:'12px 16px', background: color + '18',
+                  borderBottom:'1px solid #f3f4f6', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                  <span style={{ fontWeight:700, fontSize:14, color:'#111827' }}>
+                    {calM+1}月{calDay}日
+                  </span>
+                  {calDayTxs.length > 0 && (
+                    <span style={{ fontSize:12, color:'#9ca3af' }}>{calDayTxs.length}筆</span>
+                  )}
+                </div>
+                {calDayTxs.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'24px 0', color:'#9ca3af', fontSize:13 }}>這天沒有記錄</div>
+                ) : calDayTxs.map((tx, i) => (
+                  <TxRow key={tx.id} tx={tx} last={i === calDayTxs.length-1} onSelect={setSelTx} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══ 新增記帳 ══ */}
+        {tab === 'add' && (
+          <div>
+            <div style={{ background:'white', display:'flex', borderBottom:'1px solid #f3f4f6' }}>
+              {['expense','income'].map(t => (
+                <button key={t} onClick={() => { setType(t); setCatId(''); setSub(''); }}
+                  style={{ flex:1, padding:'14px 0', border:'none', background:'transparent', cursor:'pointer',
+                    fontSize:15, fontWeight:700,
+                    color: type===t ? (t==='expense' ? '#ef4444' : '#10b981') : '#9ca3af',
+                    borderBottom: type===t ? `2.5px solid ${t==='expense' ? '#ef4444' : '#10b981'}` : '2.5px solid transparent' }}>
+                  {t === 'expense' ? '💸 支出' : '💰 收入'}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ background:'white', padding:'16px 20px 10px', textAlign:'right', borderBottom:'1px solid #f3f4f6' }}>
+              <div style={{ fontSize:12, color:'#9ca3af', marginBottom:2 }}>NT$</div>
+              <div style={{ fontSize:44, fontWeight:800, lineHeight:1.1, minHeight:54,
+                color: type==='expense' ? '#ef4444' : '#10b981' }}>{calc}</div>
+              {catId && (
+                <div style={{ fontSize:13, marginTop:6, color, fontWeight:600 }}>
+                  {selCat?.emoji} {selCat?.name}
+                  {sub ? ` › ${sub}` : <span style={{color:'#9ca3af',fontWeight:400}}> （可選細項）</span>}
+                </div>
+              )}
+            </div>
+
+            <div style={{ background:'white', display:'flex', borderBottom:'1px solid #f3f4f6', marginTop:6 }}>
+              <div style={{ padding:'10px 14px', borderRight:'1px solid #f3f4f6', flexShrink:0 }}>
+                <div style={{ fontSize:10, color:'#9ca3af', letterSpacing:0.5, marginBottom:3 }}>📅 日期</div>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                  style={{ border:'none', outline:'none', fontSize:13, color:'#1f2937', background:'transparent', width:130 }} />
+              </div>
+              <div style={{ padding:'10px 14px', flex:1 }}>
+                <div style={{ fontSize:10, color:'#9ca3af', letterSpacing:0.5, marginBottom:3 }}>📝 備忘錄</div>
+                <input placeholder="新增備忘錄..." value={memo} onChange={e => setMemo(e.target.value)}
+                  style={{ border:'none', outline:'none', fontSize:13, color:'#1f2937', background:'transparent', width:'100%' }} />
+              </div>
+            </div>
+
+            <div style={{ background:'white', padding:'12px 14px', marginTop:6, borderBottom:'1px solid #f3f4f6' }}>
+              <div style={{ fontSize:11, color:'#9ca3af', marginBottom:8, letterSpacing:0.5, fontWeight:700 }}>分類</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:7 }}>
+                {addCats.map(c => {
+                  const active = catId === c.id;
+                  return (
+                    <button key={c.id} onClick={() => { setCatId(c.id); setSub(''); }}
+                      style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:3,
+                        padding:'8px 10px', minWidth:62, borderRadius:12, border:'none', cursor:'pointer',
+                        background: active ? (type==='expense' ? '#fff1f2' : '#f0fdf4') : '#f9fafb',
+                        outline: active ? `2px solid ${type==='expense' ? '#f87171' : '#34d399'}` : '2px solid transparent' }}>
+                      <span style={{ fontSize:24 }}>{c.emoji}</span>
+                      <span style={{ fontSize:11, color:'#374151', fontWeight: active ? 700 : 400 }}>{c.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {catId && selCat && selCat.subs.length > 0 && (
+                <div style={{ marginTop:12 }}>
+                  <div style={{ fontSize:11, color:'#9ca3af', marginBottom:7, letterSpacing:0.5, fontWeight:700 }}>細項</div>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                    {selCat.subs.map(s => (
+                      <button key={s} onClick={() => setSub(sub===s ? '' : s)}
+                        style={{ padding:'5px 13px', borderRadius:99, border:'none', cursor:'pointer', fontSize:12,
+                          background: sub===s ? color : '#f3f4f6',
+                          color: sub===s ? 'white' : '#374151',
+                          fontWeight: sub===s ? 700 : 400 }}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ background:'white', padding:12, marginTop:6 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+                {KEYS.map((k, i) => {
+                  const isSave   = k === '✓';
+                  const isDel    = k === '⌫' || k === 'C';
+                  const isZero   = i === 12;
+                  const ok       = catId && parseFloat(calc) > 0;
+                  return (
+                    <button key={k+i} onClick={() => isSave ? handleSave() : handleKey(k)}
+                      disabled={isSave && !ok}
+                      style={{ padding:'16px 0', borderRadius:14, border:'none',
+                        cursor: (isSave && !ok) ? 'not-allowed' : 'pointer',
+                        fontSize: isSave ? 22 : 18, fontWeight:700,
+                        gridColumn: isZero ? 'span 2' : undefined,
+                        background: isSave ? color : isDel ? '#fef2f2' : '#f9fafb',
+                        color: isSave ? 'white' : isDel ? '#ef4444' : '#111827',
+                        opacity: (isSave && !ok) ? 0.35 : 1,
+                        boxShadow: isSave ? `0 2px 8px ${color}55` : 'none' }}>
+                      {k}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ textAlign:'center', marginTop:8, fontSize:12, color:'#9ca3af' }}>
+                {!catId ? '⬆ 請先選擇分類' : parseFloat(calc) <= 0 ? '⬆ 請輸入金額' : '✓ 按右下角儲存'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══ 統計 ══ */}
+        {tab === 'stats' && (
+          <div style={{ padding:16 }}>
+            <ScopeBar scope={scope} setScope={setScope} color={color} curLedger={curLedger} />
+
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+              {[
+                { label:'總支出', val:`-NT$${f(statsTotals.exp)}`, col:'#ef4444' },
+                { label:'總收入', val:`+NT$${f(statsTotals.inc)}`, col:'#10b981' },
+              ].map(({ label,val,col }) => (
+                <div key={label} style={{ background:'white', borderRadius:16, padding:'16px' }}>
+                  <div style={{ fontSize:12, color:'#9ca3af', marginBottom:6 }}>{label}</div>
+                  <div style={{ fontSize:17, fontWeight:800, color:col }}>{val}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background:'white', borderRadius:16, padding:'18px', marginBottom:12 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:'#111827', marginBottom:16 }}>支出分類明細</div>
+              {catStats.length === 0 ? (
+                <div style={{ color:'#9ca3af', fontSize:13, textAlign:'center', padding:'20px 0' }}>尚無支出資料</div>
+              ) : catStats.map((c) => (
+                <div key={c.name} style={{ marginBottom:14 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5, fontSize:13 }}>
+                    <span style={{ fontWeight:600 }}>{c.emoji} {c.name}</span>
+                    <span>
+                      <span style={{ fontWeight:700, color:'#1f2937' }}>NT${f(c.amount)}</span>
+                      <span style={{ color:'#9ca3af', marginLeft:6 }}>{c.pct}%</span>
+                    </span>
+                  </div>
+                  <div style={{ background:'#f3f4f6', borderRadius:99, height:8, overflow:'hidden' }}>
+                    <div style={{ height:'100%', borderRadius:99, background:color, width:`${c.pct}%`, transition:'width 0.4s' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background:'white', borderRadius:16, padding:'16px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div>
+                <div style={{ fontSize:12, color:'#9ca3af', marginBottom:4 }}>記帳筆數</div>
+                <div style={{ fontSize:24, fontWeight:800, color:'#111827' }}>
+                  {scopedTxs.length} <span style={{ fontSize:16, fontWeight:500, color:'#6b7280' }}>筆</span>
+                </div>
+              </div>
+              <div style={{ fontSize:40 }}>{scope === 'all' ? '📊' : curLedger?.emoji}</div>
+            </div>
+          </div>
+        )}
+
+        {/* ══ 設定 ══ */}
+        {tab === 'settings' && (
+          <div>
+            <div style={{ background:'white', display:'flex', borderBottom:'1px solid #f3f4f6' }}>
+              {[['ledgers','📚 帳本'],['categories','🏷️ 分類'],['export','📤 匯出']].map(([v,lbl]) => (
+                <button key={v} onClick={() => setStab(v)}
+                  style={{ flex:1, padding:'13px 0', border:'none', background:'transparent', cursor:'pointer',
+                    fontSize:12, fontWeight:700,
+                    color: stab===v ? color : '#9ca3af',
+                    borderBottom: stab===v ? `2.5px solid ${color}` : '2.5px solid transparent' }}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+
+            {stab === 'ledgers' && (
+              <div style={{ padding:16 }}>
+                <div style={{ fontSize:15, fontWeight:800, color:'#111827', marginBottom:14 }}>我的帳本</div>
+                {ledgers.map(l => {
+                  const lTxs = txs.filter(t => t.ledgerId === l.id);
+                  const lInc = lTxs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount, 0);
+                  const lExp = lTxs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount, 0);
+                  const isCur = l.id === curId;
+                  return (
+                    <div key={l.id} style={{ background:'white', borderRadius:16, padding:16, marginBottom:10,
+                      outline: isCur ? `2.5px solid ${l.color}` : 'none' }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:12, cursor:'pointer' }}
+                        onClick={() => { setCurId(l.id); setTab('home'); }}>
+                        <div style={{ width:52, height:52, borderRadius:16, fontSize:28, flexShrink:0,
+                          background: l.color+'22', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                          {l.emoji}
+                        </div>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                            <span style={{ fontWeight:700, fontSize:15, color:'#111827' }}>{l.name}</span>
+                            {isCur && <span style={{ fontSize:11, color:l.color, fontWeight:700,
+                              background: l.color+'18', padding:'1px 7px', borderRadius:99 }}>目前</span>}
+                          </div>
+                          <div style={{ fontSize:12, color:'#9ca3af', marginTop:3 }}>
+                            {lTxs.length}筆　支出 NT${f(lExp)}
+                          </div>
+                        </div>
+                        <div style={{ fontWeight:800, fontSize:15, flexShrink:0,
+                          color: (lInc-lExp) >= 0 ? '#10b981' : '#ef4444' }}>
+                          {(lInc-lExp)>=0?'+':'-'}NT${f(lInc-lExp)}
+                        </div>
+                      </div>
+                      {l.id !== 'daily' && (
+                        <div style={{ display:'flex', justifyContent:'flex-end', marginTop:10,
+                          paddingTop:10, borderTop:'1px solid #f3f4f6' }}>
+                          <button onClick={() => handleDeleteLedger(l.id)}
+                            style={{ padding:'4px 14px', borderRadius:8, border:'1px solid #fca5a5',
+                              background:'#fff1f2', color:'#ef4444', fontSize:12, cursor:'pointer', fontWeight:600 }}>
+                            刪除帳本
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {!showNL ? (
+                  <button onClick={() => setShowNL(true)}
+                    style={{ width:'100%', padding:16, borderRadius:16, border:'2px dashed #d1d5db',
+                      background:'transparent', cursor:'pointer', fontSize:14, color:'#6b7280', fontWeight:600 }}>
+                    ＋ 新增自定義帳本
+                  </button>
+                ) : (
+                  <div style={{ background:'white', borderRadius:16, padding:20 }}>
+                    <div style={{ fontSize:15, fontWeight:800, color:'#111827', marginBottom:16 }}>新增帳本</div>
+                    <input placeholder="帳本名稱（例：日本旅遊 2025）" value={nlName}
+                      onChange={e => setNlName(e.target.value)}
+                      style={{ width:'100%', padding:'11px 13px', borderRadius:10, border:'1px solid #e5e7eb',
+                        fontSize:14, outline:'none', boxSizing:'border-box', marginBottom:16 }} />
+                    <div style={{ fontSize:12, color:'#9ca3af', marginBottom:8, fontWeight:700 }}>選擇圖示</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:7, marginBottom:16 }}>
+                      {LEDGER_EMOJIS.map(e => (
+                        <button key={e} onClick={() => setNlEmoji(e)}
+                          style={{ width:40, height:40, borderRadius:10, border:'none', cursor:'pointer',
+                            fontSize:20, background:'#f9fafb',
+                            outline: nlEmoji===e ? `2.5px solid ${nlColor}` : '2.5px solid transparent' }}>
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize:12, color:'#9ca3af', marginBottom:8, fontWeight:700 }}>選擇主題色</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:9, marginBottom:20 }}>
+                      {PALETTE.map(c => (
+                        <button key={c} onClick={() => setNlColor(c)}
+                          style={{ width:34, height:34, borderRadius:'50%', border:'none', cursor:'pointer',
+                            background:c, boxShadow: nlColor===c ? `0 0 0 3px white,0 0 0 5px ${c}` : 'none' }} />
+                      ))}
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 14px',
+                      borderRadius:12, background: nlColor+'18', marginBottom:16 }}>
+                      <span style={{ fontSize:24 }}>{nlEmoji}</span>
+                      <span style={{ fontWeight:700, color: nlColor, fontSize:15 }}>{nlName || '帳本名稱預覽'}</span>
+                    </div>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button onClick={() => setShowNL(false)}
+                        style={{ flex:1, padding:12, borderRadius:12, border:'1px solid #e5e7eb',
+                          background:'white', cursor:'pointer', fontSize:14, color:'#6b7280', fontWeight:600 }}>取消</button>
+                      <button onClick={handleCreateLedger}
+                        style={{ flex:2, padding:12, borderRadius:12, border:'none',
+                          cursor: nlName.trim() ? 'pointer' : 'not-allowed',
+                          background: nlName.trim() ? nlColor : '#e5e7eb',
+                          color:'white', fontSize:14, fontWeight:700, opacity: nlName.trim() ? 1 : 0.5 }}>
+                        🎉 建立帳本
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {stab === 'categories' && (
+              <div style={{ padding:16 }}>
+                <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+                  {[['expense','💸 支出'],['income','💰 收入']].map(([v,lbl]) => (
+                    <button key={v} onClick={() => { setCmType(v); setExpandCid(null); setShowAddC(false); }}
+                      style={{ flex:1, padding:'10px 0', borderRadius:12, border:'none', cursor:'pointer',
+                        fontSize:13, fontWeight:700,
+                        background: cmType===v ? color : '#f3f4f6',
+                        color: cmType===v ? 'white' : '#6b7280' }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+
+                {(cmType === 'expense' ? expCats : incCats).map(c => (
+                  <div key={c.id} style={{ background:'white', borderRadius:14, marginBottom:10, overflow:'hidden' }}>
+                    <div style={{ display:'flex', alignItems:'center', padding:'13px 16px',
+                      borderBottom: expandCid===c.id ? '1px solid #f3f4f6' : 'none' }}>
+                      <span style={{ fontSize:22, marginRight:10 }}>{c.emoji}</span>
+                      <span style={{ fontWeight:700, fontSize:14, color:'#111827', flex:1 }}>{c.name}</span>
+                      <span style={{ fontSize:12, color:'#9ca3af', marginRight:8 }}>{c.subs.length}項</span>
+                      <button onClick={() => { setExpandCid(expandCid===c.id ? null : c.id); setNewSub(''); }}
+                        style={{ background:'#f3f4f6', border:'none', borderRadius:8,
+                          padding:'4px 10px', fontSize:12, cursor:'pointer', color:'#6b7280', fontWeight:600, marginRight:6 }}>
+                        {expandCid===c.id ? '收起' : '展開'}
+                      </button>
+                      <button onClick={() => handleDeleteCat(c.id)}
+                        style={{ background:'#fff1f2', border:'none', borderRadius:8,
+                          padding:'4px 9px', fontSize:13, cursor:'pointer', color:'#ef4444', fontWeight:700 }}>
+                        ✕
+                      </button>
+                    </div>
+
+                    {expandCid === c.id && (
+                      <div style={{ padding:'12px 16px', background:'#fafafa' }}>
+                        <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:10 }}>
+                          {c.subs.length === 0 && (
+                            <span style={{ fontSize:12, color:'#9ca3af' }}>尚無細項</span>
+                          )}
+                          {c.subs.map((s, idx) => (
+                            <div key={idx} style={{ display:'flex', alignItems:'center', gap:4,
+                              background:'white', borderRadius:99, padding:'4px 10px', border:'1px solid #e5e7eb' }}>
+                              <span style={{ fontSize:12, color:'#374151' }}>{s}</span>
+                              <button onClick={() => handleDeleteSub(c.id, idx)}
+                                style={{ background:'none', border:'none', cursor:'pointer',
+                                  color:'#9ca3af', fontSize:12, padding:0, lineHeight:1, fontWeight:700 }}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ display:'flex', gap:6 }}>
+                          <input placeholder="新增細項…" value={newSub}
+                            onChange={e => setNewSub(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleAddSub(c.id)}
+                            style={{ flex:1, padding:'7px 10px', borderRadius:8, border:'1px solid #e5e7eb',
+                              fontSize:13, outline:'none' }} />
+                          <button onClick={() => handleAddSub(c.id)}
+                            style={{ padding:'7px 16px', borderRadius:8, border:'none', cursor:'pointer',
+                              background:color, color:'white', fontSize:13, fontWeight:700 }}>＋</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {!showAddC ? (
+                  <button onClick={() => setShowAddC(true)}
+                    style={{ width:'100%', padding:14, borderRadius:14, border:'2px dashed #d1d5db',
+                      background:'transparent', cursor:'pointer', fontSize:13, color:'#6b7280', fontWeight:600 }}>
+                    ＋ 新增{cmType==='expense'?'支出':'收入'}分類
+                  </button>
+                ) : (
+                  <div style={{ background:'white', borderRadius:14, padding:16 }}>
+                    <div style={{ fontSize:14, fontWeight:700, marginBottom:12, color:'#111827' }}>新增分類</div>
+                    <input placeholder="分類名稱" value={ncName} onChange={e => setNcName(e.target.value)}
+                      style={{ width:'100%', padding:'9px 12px', borderRadius:9, border:'1px solid #e5e7eb',
+                        fontSize:14, outline:'none', boxSizing:'border-box', marginBottom:12 }} />
+                    <div style={{ fontSize:12, color:'#9ca3af', marginBottom:8, fontWeight:600 }}>選擇圖示</div>
+                    <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:14 }}>
+                      {CAT_EMOJIS.map(e => (
+                        <button key={e} onClick={() => setNcEmoji(e)}
+                          style={{ width:38, height:38, borderRadius:9, border:'none', cursor:'pointer',
+                            fontSize:19, background:'#f9fafb',
+                            outline: ncEmoji===e ? `2px solid ${color}` : '2px solid transparent' }}>
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button onClick={() => { setShowAddC(false); setNcName(''); }}
+                        style={{ flex:1, padding:10, borderRadius:10, border:'1px solid #e5e7eb',
+                          background:'white', cursor:'pointer', fontSize:13, color:'#6b7280', fontWeight:600 }}>取消</button>
+                      <button onClick={handleAddCat}
+                        style={{ flex:2, padding:10, borderRadius:10, border:'none',
+                          cursor: ncName.trim() ? 'pointer' : 'not-allowed',
+                          background: ncName.trim() ? color : '#e5e7eb',
+                          color:'white', fontSize:13, fontWeight:700, opacity: ncName.trim() ? 1 : 0.5 }}>
+                        建立分類
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {stab === 'export' && (
+              <div style={{ padding:16 }}>
+                <div style={{ background:'white', borderRadius:16, padding:'28px 24px', textAlign:'center', marginBottom:12 }}>
+                  <div style={{ fontSize:52, marginBottom:14 }}>📊</div>
+                  <div style={{ fontSize:17, fontWeight:800, color:'#111827', marginBottom:8 }}>匯出記帳資料</div>
+                  <div style={{ fontSize:13, color:'#6b7280', marginBottom:24, lineHeight:1.7 }}>
+                    將所有帳本的記帳記錄匯出為 CSV 格式<br/>
+                    可直接用 Excel、Numbers 或 Google Sheets 開啟
+                  </div>
+                  <div style={{ background:'#f9fafb', borderRadius:12, padding:'14px 16px', marginBottom:24,
+                    textAlign:'left', fontSize:13, color:'#6b7280', lineHeight:1.9 }}>
+                    <div>📁 檔案格式：CSV（UTF-8 含 BOM，支援中文）</div>
+                    <div>📋 欄位：日期、帳本、類型、金額、主分類、細項、備忘錄</div>
+                    <div>📚 帳本數：{ledgers.length} 個</div>
+                    <div>📝 共 <strong style={{color:'#111827'}}>{txs.length}</strong> 筆記錄</div>
+                  </div>
+                  <button onClick={handleExport} disabled={txs.length === 0}
+                    style={{ width:'100%', padding:'15px', borderRadius:14, border:'none',
+                      cursor: txs.length > 0 ? 'pointer' : 'not-allowed',
+                      background: txs.length > 0 ? color : '#e5e7eb',
+                      color:'white', fontSize:16, fontWeight:800,
+                      opacity: txs.length > 0 ? 1 : 0.5,
+                      boxShadow: txs.length > 0 ? `0 4px 14px ${color}55` : 'none' }}>
+                    ⬇ 下載 CSV 檔案
+                  </button>
+                  {txs.length === 0 && (
+                    <div style={{ marginTop:10, fontSize:12, color:'#9ca3af' }}>新增記帳後才能匯出</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ════ 交易詳情 Modal ════ */}
+      {selTx && (
+        <>
+          <div onClick={() => setSelTx(null)}
+            style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', zIndex:200 }} />
+          <div style={{ position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
+            width:'100%', maxWidth:390, background:'white',
+            borderRadius:'22px 22px 0 0', padding:'24px 24px 36px', zIndex:201 }}>
+            <div style={{ width:40, height:4, background:'#e5e7eb', borderRadius:99, margin:'0 auto 20px' }} />
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ width:54, height:54, borderRadius:18, fontSize:30,
+                  background: selTx.type==='expense' ? '#fff1f2' : '#f0fdf4',
+                  display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  {selTx.catEmoji}
+                </div>
+                <div>
+                  <div style={{ fontWeight:800, fontSize:16, color:'#111827' }}>{selTx.catName}</div>
+                  {selTx.sub && <div style={{ fontSize:13, color:'#6b7280', marginTop:2 }}>{selTx.sub}</div>}
+                </div>
+              </div>
+              <div style={{ fontWeight:800, fontSize:22, color: selTx.type==='income' ? '#10b981' : '#ef4444' }}>
+                {selTx.type==='income' ? '+' : '-'}NT${f(selTx.amount)}
+              </div>
+            </div>
+            {[
+              ['📅 日期',   selTx.date.replace(/-/g,'/')],
+              ['📂 類型',   selTx.type==='expense' ? '💸 支出' : '💰 收入'],
+              ['📚 帳本',   ledgers.find(l=>l.id===selTx.ledgerId)?.name||''],
+              selTx.memo ? ['📝 備忘錄', selTx.memo] : null,
+            ].filter(Boolean).map(([k,v]) => (
+              <div key={k} style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
+                padding:'11px 0', borderTop:'1px solid #f3f4f6', fontSize:14 }}>
+                <span style={{ color:'#9ca3af' }}>{k}</span>
+                <span style={{ color:'#111827', fontWeight:600 }}>{v}</span>
+              </div>
+            ))}
+            <button onClick={() => handleDelete(selTx.id)}
+              style={{ width:'100%', marginTop:18, padding:14, borderRadius:14, border:'none',
+                background:'#fff1f2', color:'#ef4444', fontSize:15, fontWeight:700, cursor:'pointer' }}>
+              🗑️ 刪除此筆記錄
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ════ 底部導覽 ════ */}
+      <div style={{ position:'fixed', bottom:0, left:'50%', transform:'translateX(-50%)',
+        width:'100%', maxWidth:390, background:'white', borderTop:'1px solid #e5e7eb',
+        display:'flex', alignItems:'center', paddingBottom:10, zIndex:100 }}>
+        <NavBtn emoji="🏠" label="首頁"  active={tab==='home'}     color={color} onClick={() => setTab('home')} />
+        <NavBtn emoji="📅" label="日曆"  active={tab==='calendar'} color={color} onClick={() => setTab('calendar')} />
+        <div style={{ flex:1, display:'flex', justifyContent:'center' }}>
+          <button onClick={() => { resetForm(); setType('expense'); setTab('add'); }}
+            style={{ width:56, height:56, borderRadius:'50%', border:'none', background:color,
+              color:'white', fontSize:30, cursor:'pointer', marginTop:-24,
+              boxShadow:`0 4px 18px ${color}88`,
+              display:'flex', alignItems:'center', justifyContent:'center', lineHeight:1 }}>
+            ＋
+          </button>
+        </div>
+        <NavBtn emoji="📊" label="統計"  active={tab==='stats'}    color={color} onClick={() => setTab('stats')} />
+        <NavBtn emoji="⚙️" label="設定"  active={tab==='settings'} color={color} onClick={() => setTab('settings')} />
+      </div>
+    </div>
+  );
+}
+
+function NavBtn({ emoji, label, active, color, onClick }) {
+  return (
+    <button onClick={onClick}
+      style={{ flex:1, border:'none', background:'transparent', cursor:'pointer',
+        padding:'10px 0 0', display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
+      <span style={{ fontSize:22 }}>{emoji}</span>
+      <span style={{ fontSize:11, fontWeight: active ? 800 : 400,
+        color: active ? color : '#9ca3af', transition:'color 0.2s' }}>{label}</span>
+    </button>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
