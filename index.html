@@ -36,6 +36,27 @@ const KEYS = ['7','8','9','⌫', '4','5','6','C', '1','2','3','.', '0','00','✓
 const WEEKDAYS = ['日','一','二','三','四','五','六'];
 const MONTHS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
 
+// ── 幣別 ──────────────────────────────────────────────────────────────────────
+const CURRENCIES = [
+  { code:'TWD', symbol:'NT$', name:'台幣', flag:'🇹🇼' },
+  { code:'JPY', symbol:'¥',   name:'日圓', flag:'🇯🇵' },
+  { code:'KRW', symbol:'₩',   name:'韓圓', flag:'🇰🇷' },
+  { code:'USD', symbol:'$',   name:'美金', flag:'🇺🇸' },
+  { code:'EUR', symbol:'€',   name:'歐元', flag:'🇪🇺' },
+  { code:'HKD', symbol:'HK$', name:'港幣', flag:'🇭🇰' },
+  { code:'GBP', symbol:'£',   name:'英鎊', flag:'🇬🇧' },
+  { code:'SGD', symbol:'S$',  name:'新幣', flag:'🇸🇬' },
+  { code:'AUD', symbol:'A$',  name:'澳幣', flag:'🇦🇺' },
+  { code:'THB', symbol:'฿',   name:'泰銖', flag:'🇹🇭' },
+];
+// 無小數的幣別（日圓、韓圓）
+const NO_DECIMAL = new Set(['JPY','KRW','TWD']);
+const fCurr = (n, code) =>
+  Math.abs(n).toLocaleString('zh-TW', {
+    maximumFractionDigits: NO_DECIMAL.has(code) ? 0 : 2,
+    minimumFractionDigits: 0,
+  });
+
 // ── 預設分類 ─────────────────────────────────────────────────────────────────
 const DEFAULT_EXP = [
   { id:'food',      name:'飲食',   emoji:'🍽️', subs:['早餐','午餐','晚餐','飲料','點心','宵夜'] },
@@ -111,9 +132,20 @@ function TxRow({ tx, last, onSelect }) {
           </div>
         )}
       </div>
-      <div style={{ fontWeight:800, fontSize:15, flexShrink:0,
-        color: tx.type==='income' ? '#10b981' : '#ef4444' }}>
-        {tx.type==='income' ? '+' : '-'}NT${f(tx.amount)}
+      <div style={{ textAlign:'right', flexShrink:0 }}>
+        {tx.origCurrency && tx.origCurrency !== 'TWD' && (() => {
+          const cur = [...CURRENCIES, ...(tx._customCurrencies||[])].find(c => c.code === tx.origCurrency)
+                   || { symbol: tx.origCurrency, code: tx.origCurrency };
+          return (
+            <div style={{ fontSize:11, color:'#9ca3af', marginBottom:1 }}>
+              {cur.symbol}{fCurr(tx.origAmount, tx.origCurrency)} {tx.origCurrency}
+            </div>
+          );
+        })()}
+        <div style={{ fontWeight:800, fontSize:15,
+          color: tx.type==='income' ? '#10b981' : '#ef4444' }}>
+          {tx.type==='income' ? '+' : '-'}NT${f(tx.amount)}
+        </div>
       </div>
     </div>
   );
@@ -173,6 +205,30 @@ function App() {
   const [nlEmoji, setNlEmoji] = useState('✈️');
   const [nlColor, setNlColor] = useState('#ec4899');
 
+  // ■ 外幣
+  const [currency,     setCurrency]     = useState('TWD');
+  const [apiRates,     setApiRates]     = useState({});   // CDN: { jpy: 4.71, ... }（1 TWD = X 外幣，小寫）
+  const [ratesLoading, setRatesLoading] = useState(false);
+  const [ratesLoaded,  setRatesLoaded]  = useState(false);
+  const [showMoreCurr, setShowMoreCurr] = useState(false);
+  const [editingRate,  setEditingRate]  = useState(false); // 手動編輯匯率模式
+  // 手動匯率：{ JPY: 0.212, ... }，1 外幣 = X TWD（使用者設定，優先於 API）
+  const [manualRates,  setManualRates]  = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kz_manualRates')) || {}; }
+    catch { return {}; }
+  });
+  // 自訂幣別：[{ code, symbol, name }]
+  const [customCurrencies, setCustomCurrencies] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kz_customCurrencies')) || []; }
+    catch { return []; }
+  });
+  // 新增自訂幣別表單
+  const [showAddCurr,  setShowAddCurr]  = useState(false);
+  const [newCurrCode,  setNewCurrCode]  = useState('');
+  const [newCurrSym,   setNewCurrSym]   = useState('');
+  const [newCurrName,  setNewCurrName]  = useState('');
+  const [newCurrRate,  setNewCurrRate]  = useState('');
+
   // ■ 分類管理
   const [cmType,    setCmType]    = useState('expense');
   const [showAddC,  setShowAddC]  = useState(false);
@@ -181,12 +237,29 @@ function App() {
   const [expandCid, setExpandCid] = useState(null);
   const [newSub,    setNewSub]    = useState('');
 
+  // ■ 啟動時抓匯率（jsDelivr CDN，免費 + CORS 友善）
+  useEffect(() => {
+    setRatesLoading(true);
+    fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/twd.min.json')
+      .then(r => r.json())
+      .then(d => { setApiRates(d.twd || {}); setRatesLoaded(true); setRatesLoading(false); })
+      .catch(() => {
+        // 備用：嘗試另一個端點
+        fetch('https://latest.currency-api.pages.dev/v1/currencies/twd.min.json')
+          .then(r => r.json())
+          .then(d => { setApiRates(d.twd || {}); setRatesLoaded(true); setRatesLoading(false); })
+          .catch(() => { setRatesLoaded(false); setRatesLoading(false); });
+      });
+  }, []);
+
   // ■ 自動儲存到 localStorage（任何資料變動時觸發）
   useEffect(() => { localStorage.setItem('kz_ledgers', JSON.stringify(ledgers)); }, [ledgers]);
   useEffect(() => { localStorage.setItem('kz_curId', curId); }, [curId]);
   useEffect(() => { localStorage.setItem('kz_txs', JSON.stringify(txs)); }, [txs]);
   useEffect(() => { localStorage.setItem('kz_expCats', JSON.stringify(expCats)); }, [expCats]);
   useEffect(() => { localStorage.setItem('kz_incCats', JSON.stringify(incCats)); }, [incCats]);
+  useEffect(() => { localStorage.setItem('kz_manualRates', JSON.stringify(manualRates)); }, [manualRates]);
+  useEffect(() => { localStorage.setItem('kz_customCurrencies', JSON.stringify(customCurrencies)); }, [customCurrencies]);
 
   // ── 衍生資料 ─────────────────────────────────────────────────────────────
   const curLedger = ledgers.find(l => l.id === curId) || ledgers[0];
@@ -274,6 +347,22 @@ function App() {
   for (let d = 1; d <= daysInMonth; d++) calGrid.push(d);
   while (calGrid.length % 7 !== 0) calGrid.push(null);
 
+  // ── 匯率工具 ─────────────────────────────────────────────────────────────
+  // 回傳「1 外幣 = ? TWD」；手動設定優先於 API；API 資料為小寫 code
+  const getRate = code => {
+    if (code === 'TWD') return 1;
+    if (manualRates[code] > 0) return manualRates[code];       // 使用者手動設定
+    const apiVal = apiRates[code.toLowerCase()];               // CDN 資料為小寫
+    return apiVal > 0 ? 1 / apiVal : null;                     // 1 TWD = apiVal 外幣 → 1 外幣 = 1/apiVal TWD
+  };
+  const calcTwd = (foreignAmt, code) => {
+    const r = getRate(code);
+    return r ? Math.round(foreignAmt * r) : null;
+  };
+  // 所有可用幣別（內建 + 自訂）
+  const allCurrencies = [...CURRENCIES, ...customCurrencies];
+  const getCurInfo = code => allCurrencies.find(c => c.code === code);
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleKey = k => setCalc(prev => {
     if (k === 'C')  return '0';
@@ -285,17 +374,48 @@ function App() {
     return prev.length < 10 ? prev + k : prev;
   });
 
-  const resetForm = () => { setCalc('0'); setCatId(''); setSub(''); setMemo(''); setDate(tod()); };
+  const resetForm = () => {
+    setCalc('0'); setCatId(''); setSub(''); setMemo(''); setDate(tod());
+    setShowMoreCurr(false); setEditingRate(false);
+  };
+
+  const handleAddCustomCurrency = () => {
+    const code = newCurrCode.trim().toUpperCase();
+    const rate = parseFloat(newCurrRate);
+    if (!code || !newCurrSym.trim()) return;
+    if (allCurrencies.find(c => c.code === code)) return; // 已存在
+    setCustomCurrencies(prev => [...prev, { code, symbol: newCurrSym.trim(), name: newCurrName.trim() || code, flag: '🏳️' }]);
+    if (rate > 0) setManualRates(prev => ({ ...prev, [code]: rate }));
+    setCurrency(code);
+    setNewCurrCode(''); setNewCurrSym(''); setNewCurrName(''); setNewCurrRate('');
+    setShowAddCurr(false);
+  };
 
   const handleSave = () => {
-    const amount = parseFloat(calc);
-    if (!amount || amount <= 0 || !catId) return;
+    const rawAmt = parseFloat(calc);
+    if (!rawAmt || rawAmt <= 0 || !catId) return;
+
+    let amount, origAmount = null, origCurrency = null, usedRate = null;
+    if (currency === 'TWD') {
+      amount = rawAmt;
+    } else {
+      const r = getRate(currency);
+      if (!r) return; // 匯率尚未載入
+      usedRate = r;
+      origAmount = rawAmt;
+      origCurrency = currency;
+      amount = Math.round(rawAmt * r);
+    }
+
     const cat = addCats.find(c => c.id === catId);
     setTxs(prev => [...prev, {
       id: Date.now().toString(), ledgerId: curId, type, amount,
       catId, catName: cat?.name||'', catEmoji: cat?.emoji||'',
       sub, memo, date,
+      origAmount, origCurrency, rate: usedRate,
     }]);
+    // 若是自訂幣別，確保 symbol 資訊記錄在 tx（方便 TxRow 顯示）
+    // 實際上 TxRow 會從 CURRENCIES+customCurrencies 查，這裡只補備用
     resetForm(); setTab('home');
   };
 
@@ -554,16 +674,140 @@ function App() {
               ))}
             </div>
 
-            <div style={{ background:'white', padding:'16px 20px 10px', textAlign:'right', borderBottom:'1px solid #f3f4f6' }}>
-              <div style={{ fontSize:12, color:'#9ca3af', marginBottom:2 }}>NT$</div>
-              <div style={{ fontSize:44, fontWeight:800, lineHeight:1.1, minHeight:54,
-                color: type==='expense' ? '#ef4444' : '#10b981' }}>{calc}</div>
-              {catId && (
-                <div style={{ fontSize:13, marginTop:6, color, fontWeight:600 }}>
-                  {selCat?.emoji} {selCat?.name}
-                  {sub ? ` › ${sub}` : <span style={{color:'#9ca3af',fontWeight:400}}> （可選細項）</span>}
+            <div style={{ background:'white', padding:'12px 16px 10px', borderBottom:'1px solid #f3f4f6' }}>
+
+              {/* ── 幣別選擇列 ── */}
+              <div style={{ display:'flex', gap:5, marginBottom:8, flexWrap:'wrap', alignItems:'center' }}>
+                {(showMoreCurr ? allCurrencies : allCurrencies.slice(0,5)).map(c => (
+                  <button key={c.code} onClick={() => { setCurrency(c.code); setEditingRate(false); }}
+                    style={{ padding:'4px 10px', borderRadius:99, border:'none', cursor:'pointer',
+                      fontSize:12, fontWeight: currency===c.code ? 700 : 400,
+                      background: currency===c.code ? color : '#f3f4f6',
+                      color: currency===c.code ? 'white' : '#374151' }}>
+                    {c.flag} {c.code}
+                  </button>
+                ))}
+                {!showMoreCurr && allCurrencies.length > 5 && (
+                  <button onClick={() => setShowMoreCurr(true)}
+                    style={{ padding:'4px 10px', borderRadius:99, border:'none', cursor:'pointer',
+                      fontSize:12, background:'#f3f4f6', color:'#6b7280', fontWeight:600 }}>
+                    ···更多
+                  </button>
+                )}
+                {/* 新增自訂幣別按鈕 */}
+                <button onClick={() => setShowAddCurr(v => !v)}
+                  style={{ padding:'4px 10px', borderRadius:99, border:`1px dashed ${color}`,
+                    cursor:'pointer', fontSize:12, background:'transparent', color, fontWeight:600 }}>
+                  ＋ 自訂
+                </button>
+              </div>
+
+              {/* ── 新增自訂幣別表單 ── */}
+              {showAddCurr && (
+                <div style={{ background:'#f9fafb', borderRadius:10, padding:'10px 12px', marginBottom:10,
+                  border:'1px solid #e5e7eb' }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#374151', marginBottom:8 }}>新增自訂幣別</div>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    <input placeholder="代碼 (如 MYR)" value={newCurrCode}
+                      onChange={e => setNewCurrCode(e.target.value.slice(0,6))}
+                      style={{ width:90, padding:'5px 8px', borderRadius:7, border:'1px solid #e5e7eb',
+                        fontSize:12, outline:'none', textTransform:'uppercase' }} />
+                    <input placeholder="符號 (如 RM)" value={newCurrSym}
+                      onChange={e => setNewCurrSym(e.target.value.slice(0,5))}
+                      style={{ width:70, padding:'5px 8px', borderRadius:7, border:'1px solid #e5e7eb',
+                        fontSize:12, outline:'none' }} />
+                    <input placeholder="名稱 (如 馬幣)" value={newCurrName}
+                      onChange={e => setNewCurrName(e.target.value)}
+                      style={{ width:90, padding:'5px 8px', borderRadius:7, border:'1px solid #e5e7eb',
+                        fontSize:12, outline:'none' }} />
+                    <input type="number" placeholder="1 外幣 = ? NT$" value={newCurrRate}
+                      onChange={e => setNewCurrRate(e.target.value)}
+                      style={{ width:110, padding:'5px 8px', borderRadius:7, border:'1px solid #e5e7eb',
+                        fontSize:12, outline:'none' }} />
+                    <button onClick={handleAddCustomCurrency}
+                      disabled={!newCurrCode.trim() || !newCurrSym.trim()}
+                      style={{ padding:'5px 14px', borderRadius:7, border:'none', cursor:'pointer',
+                        background: newCurrCode.trim() && newCurrSym.trim() ? color : '#e5e7eb',
+                        color:'white', fontSize:12, fontWeight:700 }}>
+                      新增
+                    </button>
+                    <button onClick={() => setShowAddCurr(false)}
+                      style={{ padding:'5px 10px', borderRadius:7, border:'1px solid #e5e7eb',
+                        cursor:'pointer', background:'white', color:'#6b7280', fontSize:12 }}>
+                      取消
+                    </button>
+                  </div>
                 </div>
               )}
+
+              {/* ── 金額顯示 ── */}
+              <div style={{ textAlign:'right' }}>
+                <div style={{ fontSize:12, color:'#9ca3af', marginBottom:2 }}>
+                  {getCurInfo(currency)?.symbol || 'NT$'}
+                </div>
+                <div style={{ fontSize:44, fontWeight:800, lineHeight:1.1, minHeight:54,
+                  color: type==='expense' ? '#ef4444' : '#10b981' }}>{calc}</div>
+
+                {/* 外幣匯率 / 換算區 */}
+                {currency !== 'TWD' && (() => {
+                  const rate = getRate(currency);
+                  const raw  = parseFloat(calc);
+                  const twd  = raw > 0 ? calcTwd(raw, currency) : null;
+
+                  return (
+                    <div style={{ marginTop:6 }}>
+                      {/* 有匯率：顯示換算 + 編輯按鈕 */}
+                      {rate && !editingRate && (
+                        <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:8 }}>
+                          <span style={{ fontSize:13, color:'#6b7280' }}>
+                            {twd ? `≈ NT$${f(twd)}` : `1 ${currency} ≈ NT$${rate < 0.01 ? rate.toFixed(4) : rate.toFixed(2)}`}
+                            {ratesLoading && ' ⏳'}
+                          </span>
+                          <button onClick={() => setEditingRate(true)}
+                            style={{ fontSize:11, color:'#9ca3af', background:'none', border:'none',
+                              cursor:'pointer', textDecoration:'underline' }}>
+                            調整匯率
+                          </button>
+                        </div>
+                      )}
+                      {/* 無匯率 OR 編輯模式：顯示輸入框 */}
+                      {(!rate || editingRate) && (
+                        <div style={{ display:'flex', alignItems:'center', justifyContent:'flex-end', gap:6, marginTop:4 }}>
+                          <span style={{ fontSize:12, color:'#6b7280' }}>1 {currency} =</span>
+                          <input type="number" step="0.0001" min="0"
+                            placeholder={rate ? rate.toFixed(4) : '輸入匯率'}
+                            onChange={e => {
+                              const v = parseFloat(e.target.value);
+                              if (v > 0) setManualRates(prev => ({ ...prev, [currency]: v }));
+                            }}
+                            style={{ width:90, padding:'4px 8px', borderRadius:8, border:`1px solid ${color}`,
+                              fontSize:13, textAlign:'right', outline:'none', color:'#111827' }} />
+                          <span style={{ fontSize:12, color:'#6b7280' }}>NT$</span>
+                          {editingRate && (
+                            <button onClick={() => setEditingRate(false)}
+                              style={{ fontSize:11, color:color, background:'none', border:'none', cursor:'pointer', fontWeight:700 }}>
+                              ✓ 完成
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {/* 來源標示 */}
+                      {rate && !editingRate && (
+                        <div style={{ fontSize:10, color:'#d1d5db', textAlign:'right', marginTop:1 }}>
+                          {manualRates[currency] ? '手動設定' : ratesLoaded ? '即時匯率' : '⚠️ 未取得匯率，請手動設定'}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {catId && (
+                  <div style={{ fontSize:13, marginTop:6, color, fontWeight:600 }}>
+                    {selCat?.emoji} {selCat?.name}
+                    {sub ? ` › ${sub}` : <span style={{color:'#9ca3af',fontWeight:400}}> （可選細項）</span>}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div style={{ background:'white', display:'flex', borderBottom:'1px solid #f3f4f6', marginTop:6 }}>
@@ -620,7 +864,8 @@ function App() {
                   const isSave   = k === '✓';
                   const isDel    = k === '⌫' || k === 'C';
                   const isZero   = i === 12;
-                  const ok       = catId && parseFloat(calc) > 0;
+                  const rateOk   = currency === 'TWD' || (getRate(currency) > 0);
+                  const ok       = catId && parseFloat(calc) > 0 && rateOk;
                   return (
                     <button key={k+i} onClick={() => isSave ? handleSave() : handleKey(k)}
                       disabled={isSave && !ok}
