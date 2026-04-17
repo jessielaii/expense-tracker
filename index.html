@@ -190,6 +190,11 @@ function App() {
   // ■ 交易詳情 modal
   const [selTx, setSelTx] = useState(null);
 
+  // ■ 隱藏餘額
+  const [hideBalance, setHideBalance] = useState(() =>
+    localStorage.getItem('kz_hideBalance') === 'true'
+  );
+
   // ■ 統計 & 日曆資料範圍切換
   const [scope, setScope] = useState('current');
 
@@ -258,6 +263,7 @@ function App() {
   useEffect(() => { localStorage.setItem('kz_txs', JSON.stringify(txs)); }, [txs]);
   useEffect(() => { localStorage.setItem('kz_expCats', JSON.stringify(expCats)); }, [expCats]);
   useEffect(() => { localStorage.setItem('kz_incCats', JSON.stringify(incCats)); }, [incCats]);
+  useEffect(() => { localStorage.setItem('kz_hideBalance', hideBalance); }, [hideBalance]);
   useEffect(() => { localStorage.setItem('kz_manualRates', JSON.stringify(manualRates)); }, [manualRates]);
   useEffect(() => { localStorage.setItem('kz_customCurrencies', JSON.stringify(customCurrencies)); }, [customCurrencies]);
 
@@ -521,22 +527,42 @@ function App() {
               ))}
             </select>
           </div>
+          {/* 眼睛：隱藏 / 顯示餘額 */}
+          <button onClick={() => setHideBalance(v => !v)}
+            style={{ background:'rgba(255,255,255,0.18)', border:'none', borderRadius:99,
+              width:34, height:34, cursor:'pointer', fontSize:17,
+              display:'flex', alignItems:'center', justifyContent:'center' }}>
+            {hideBalance ? '🙈' : '👁️'}
+          </button>
         </div>
         <div style={{ textAlign:'center' }}>
           <div style={{ fontSize:12, opacity:0.75, letterSpacing:1 }}>本期結餘</div>
-          <div style={{ fontSize:36, fontWeight:800, margin:'4px 0', letterSpacing:-1 }}>
-            NT$ {curTotals.bal > 0 ? '+' : curTotals.bal < 0 ? '-' : ''}{f(curTotals.bal)}
-          </div>
+          {hideBalance ? (
+            <div style={{ fontSize:30, fontWeight:800, margin:'4px 0', letterSpacing:4, opacity:0.6 }}>
+              ＊＊＊＊
+            </div>
+          ) : (
+            <div style={{ fontSize:36, fontWeight:800, margin:'4px 0', letterSpacing:-1 }}>
+              NT$ {curTotals.bal > 0 ? '+' : curTotals.bal < 0 ? '-' : ''}{f(curTotals.bal)}
+            </div>
+          )}
           <div style={{ display:'flex', justifyContent:'center', gap:28, fontSize:13 }}>
-            <div><span style={{opacity:0.7}}>收入 </span><span style={{fontWeight:700}}>+{f(curTotals.inc)}</span></div>
+            <div>
+              <span style={{opacity:0.7}}>收入 </span>
+              <span style={{fontWeight:700}}>{hideBalance ? '＊＊＊' : `+${f(curTotals.inc)}`}</span>
+            </div>
             <div style={{opacity:0.35}}>│</div>
-            <div><span style={{opacity:0.7}}>支出 </span><span style={{fontWeight:700}}>-{f(curTotals.exp)}</span></div>
+            <div>
+              <span style={{opacity:0.7}}>支出 </span>
+              <span style={{fontWeight:700}}>{hideBalance ? '＊＊＊' : `-${f(curTotals.exp)}`}</span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* ════ CONTENT ════ */}
-      <div style={{ flex:1, overflowY:'auto', paddingBottom:76 }}>
+      {/* paddingBottom: add 頁面需要預留固定計算機的高度（~260px）+ nav（56px） */}
+      <div style={{ flex:1, overflowY:'auto', paddingBottom: tab === 'add' ? 316 : 76 }}>
 
         {/* ══ 首頁 ══ */}
         {tab === 'home' && (
@@ -858,34 +884,6 @@ function App() {
               )}
             </div>
 
-            <div style={{ background:'white', padding:12, marginTop:6 }}>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
-                {KEYS.map((k, i) => {
-                  const isSave   = k === '✓';
-                  const isDel    = k === '⌫' || k === 'C';
-                  const isZero   = i === 12;
-                  const rateOk   = currency === 'TWD' || (getRate(currency) > 0);
-                  const ok       = catId && parseFloat(calc) > 0 && rateOk;
-                  return (
-                    <button key={k+i} onClick={() => isSave ? handleSave() : handleKey(k)}
-                      disabled={isSave && !ok}
-                      style={{ padding:'16px 0', borderRadius:14, border:'none',
-                        cursor: (isSave && !ok) ? 'not-allowed' : 'pointer',
-                        fontSize: isSave ? 22 : 18, fontWeight:700,
-                        gridColumn: isZero ? 'span 2' : undefined,
-                        background: isSave ? color : isDel ? '#fef2f2' : '#f9fafb',
-                        color: isSave ? 'white' : isDel ? '#ef4444' : '#111827',
-                        opacity: (isSave && !ok) ? 0.35 : 1,
-                        boxShadow: isSave ? `0 2px 8px ${color}55` : 'none' }}>
-                      {k}
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ textAlign:'center', marginTop:8, fontSize:12, color:'#9ca3af' }}>
-                {!catId ? '⬆ 請先選擇分類' : parseFloat(calc) <= 0 ? '⬆ 請輸入金額' : '✓ 按右下角儲存'}
-              </div>
-            </div>
           </div>
         )}
 
@@ -1191,6 +1189,42 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* ════ 固定計算機（新增頁面專用，貼在 nav bar 上方）════ */}
+      {tab === 'add' && (
+        <div style={{ position:'fixed', bottom:56, left:'50%', transform:'translateX(-50%)',
+          width:'100%', maxWidth:390, background:'white', zIndex:99,
+          boxShadow:'0 -4px 16px rgba(0,0,0,0.08)', borderTop:'1px solid #f0f0f0' }}>
+          <div style={{ padding:'10px 12px 8px' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8 }}>
+              {KEYS.map((k, i) => {
+                const isSave = k === '✓';
+                const isDel  = k === '⌫' || k === 'C';
+                const isZero = i === 12;
+                const rateOk = currency === 'TWD' || (getRate(currency) > 0);
+                const ok     = catId && parseFloat(calc) > 0 && rateOk;
+                return (
+                  <button key={k+i} onClick={() => isSave ? handleSave() : handleKey(k)}
+                    disabled={isSave && !ok}
+                    style={{ padding:'15px 0', borderRadius:12, border:'none',
+                      cursor: (isSave && !ok) ? 'not-allowed' : 'pointer',
+                      fontSize: isSave ? 22 : 18, fontWeight:700,
+                      gridColumn: isZero ? 'span 2' : undefined,
+                      background: isSave ? color : isDel ? '#fef2f2' : '#f9fafb',
+                      color: isSave ? 'white' : isDel ? '#ef4444' : '#111827',
+                      opacity: (isSave && !ok) ? 0.35 : 1,
+                      boxShadow: isSave ? `0 2px 8px ${color}55` : 'none' }}>
+                    {k}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ textAlign:'center', marginTop:6, fontSize:12, color:'#9ca3af' }}>
+              {!catId ? '請先選擇分類 ⬆' : parseFloat(calc) <= 0 ? '請輸入金額 ⬆' : '✓ 按右下角儲存'}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ════ 交易詳情 Modal ════ */}
       {selTx && (
